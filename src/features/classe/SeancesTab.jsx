@@ -86,7 +86,7 @@ export default function SeancesTab({ classe, anneeId, onGoToRuban }) {
     if (orphanCheckedRef.current) return
     orphanCheckedRef.current = true
     const validIds = new Set(sequences.flatMap(seq => (seq.seances || []).map(s => s.id)))
-    const orphans = calEntries.filter(c => !validIds.has(c.seanceRubanId))
+    const orphans = calEntries.filter(c => c.seanceRubanId && !validIds.has(c.seanceRubanId))
     if (orphans.length > 0) {
       orphans.forEach(o => remove('seancesCalendrier', o.id))
       const n = orphans.length

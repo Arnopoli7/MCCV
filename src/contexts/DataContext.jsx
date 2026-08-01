@@ -232,6 +232,7 @@ export function DataProvider({ children }) {
     )
     const toKeep = allCal.filter(sc => {
       if (anneeId && sc.anneeScolaireId !== anneeId) return true
+      if (!sc.seanceRubanId) return true  // séances importées directement (sans ruban)
       return validIds.has(sc.seanceRubanId)
     })
     if (toKeep.length < allCal.length) {
