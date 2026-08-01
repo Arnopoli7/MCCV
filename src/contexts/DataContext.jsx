@@ -18,7 +18,6 @@ const DEFAULT_DATA = {
   emploiDuTemps: [],
   rubanPedagogique: [],
   seancesCalendrier: [],
-  seancesCalendrier_2627: [],
   ccf: [],
   stages: [],
 }
@@ -97,12 +96,6 @@ export function DataProvider({ children }) {
             }
           })
         )
-
-        // Séances 2026-2027 (document séparé, champ "seances")
-        const sc2627Snap = await getDoc(colRef(userId, 'seancesCalendrier_2627'))
-        if (sc2627Snap.exists()) {
-          newData.seancesCalendrier_2627 = sc2627Snap.data().seances || []
-        }
 
         localDataRef.current = newData
         setLocalData(newData)
@@ -213,7 +206,7 @@ export function DataProvider({ children }) {
   }
 
   const seancesCalendrier = (filters = {}) => {
-    let all = [...get('seancesCalendrier'), ...get('seancesCalendrier_2627')]
+    let all = get('seancesCalendrier')
     if (filters.anneeScolaireId) all = all.filter(s => s.anneeScolaireId === filters.anneeScolaireId)
     if (filters.classeId) all = all.filter(s => s.classeId === filters.classeId)
     return all

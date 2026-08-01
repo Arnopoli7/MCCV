@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
-import { getFirestore, doc, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyD9wT1t_Fkc0udZywXBlHhAvya06jArMgo",
@@ -361,9 +361,17 @@ const seancesCalendrier = seancesRaw.map((s, index) => {
   };
 });
 
-await setDoc(doc(db, "users", userId, "data", "seancesCalendrier_2627"), {
-  seances: seancesCalendrier
-});
+// Lire les séances existantes (autres années) et supprimer les éventuelles 2626-2627 déjà présentes
+const scRef = doc(db, "users", userId, "data", "seancesCalendrier");
+const scSnap = await getDoc(scRef);
+const existingItems = scSnap.exists() ? (scSnap.data().items || []) : [];
+const without2627 = existingItems.filter(s => s.anneeScolaireId !== anneeScolaireId);
 
-console.log(`Import termine ! ${seancesCalendrier.length} seances importees pour 2026-2027`);
+// Sauvegarder dans seancesCalendrier (format items standard)
+await setDoc(scRef, { items: [...without2627, ...seancesCalendrier] });
+
+// Supprimer l'ancien document temporaire seancesCalendrier_2627
+await deleteDoc(doc(db, "users", userId, "data", "seancesCalendrier_2627"));
+
+console.log(`Import termine ! ${seancesCalendrier.length} seances importees pour 2026-2027 (${without2627.length} seances autres annees conservees)`);
 process.exit(0);
