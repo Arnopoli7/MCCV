@@ -18,6 +18,7 @@ const DEFAULT_DATA = {
   emploiDuTemps: [],
   rubanPedagogique: [],
   seancesCalendrier: [],
+  seancesCalendrier_2627: [],
   ccf: [],
   stages: [],
 }
@@ -79,13 +80,29 @@ export function DataProvider({ children }) {
         const paramsSnap = await getDoc(colRef(userId, 'parametres'))
         if (paramsSnap.exists()) newData.parametres = paramsSnap.data()
 
-        // Collections
+        // Collections standard — fusionne .items (format actuel) avec le champ nommé (format import)
         await Promise.all(
           COLLECTIONS.map(async col => {
             const snap = await getDoc(colRef(userId, col))
-            if (snap.exists()) newData[col] = snap.data().items || []
+            if (snap.exists()) {
+              const data = snap.data()
+              const fromItems = data.items || []
+              const fromNamed = data[col] || []
+              if (fromNamed.length > 0) {
+                const existingIds = new Set(fromItems.map(i => i.id))
+                newData[col] = [...fromItems, ...fromNamed.filter(i => !existingIds.has(i.id))]
+              } else {
+                newData[col] = fromItems
+              }
+            }
           })
         )
+
+        // Séances 2026-2027 (document séparé, champ "seances")
+        const sc2627Snap = await getDoc(colRef(userId, 'seancesCalendrier_2627'))
+        if (sc2627Snap.exists()) {
+          newData.seancesCalendrier_2627 = sc2627Snap.data().seances || []
+        }
 
         localDataRef.current = newData
         setLocalData(newData)
@@ -196,7 +213,7 @@ export function DataProvider({ children }) {
   }
 
   const seancesCalendrier = (filters = {}) => {
-    let all = get('seancesCalendrier')
+    let all = [...get('seancesCalendrier'), ...get('seancesCalendrier_2627')]
     if (filters.anneeScolaireId) all = all.filter(s => s.anneeScolaireId === filters.anneeScolaireId)
     if (filters.classeId) all = all.filter(s => s.classeId === filters.classeId)
     return all
