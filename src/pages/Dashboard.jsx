@@ -24,6 +24,52 @@ const TYPE_BADGE_COLORS = {
   'Évaluation': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
 }
 
+function TodayMergedRow({ group, onToggle, onToggleAll }) {
+  const allDone = group.every(({ s }) => s.statut === 'faite')
+  const s0 = group[0].s
+  const classesNoms = group.map(({ cl }) => cl?.nom || '?').join(' / ')
+  return (
+    <div className={`rounded-xl border transition-all overflow-hidden ${allDone ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800 opacity-75' : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'}`}>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="text-xs text-gray-500 dark:text-gray-400 font-mono shrink-0">
+          {s0.heureDebut}→{s0.heureFin}
+        </span>
+        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shrink-0">
+          {group.length} classes
+        </span>
+        <span className="font-medium text-sm text-gray-800 dark:text-gray-100 truncate flex-1">{classesNoms}</span>
+        {!allDone && (
+          <button
+            onClick={onToggleAll}
+            className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/40 transition-colors"
+          >
+            ✅ Tout marquer
+          </button>
+        )}
+      </div>
+      <div className="border-t border-gray-100 dark:border-gray-700 divide-y divide-gray-50 dark:divide-gray-700/50">
+        {group.map(({ s, cl }) => {
+          const isFaite = s.statut === 'faite'
+          return (
+            <div key={s.id} className="flex items-center gap-2 px-3 py-1.5">
+              {cl && <div className="w-1 h-4 rounded-full shrink-0" style={{ backgroundColor: cl.couleur }} />}
+              <span className="text-xs font-semibold shrink-0" style={{ color: cl?.couleur || '#94a3b8' }}>{cl?.nom || '?'}</span>
+              <span className="text-xs text-gray-600 dark:text-gray-300 flex-1 truncate">{s.titre || 'Séance'}</span>
+              {isFaite && <span className="text-xs text-green-600 dark:text-green-400 shrink-0">✓</span>}
+              <button
+                onClick={() => onToggle(s)}
+                className={`shrink-0 text-xs px-2 py-0.5 rounded transition-colors ${isFaite ? 'text-gray-400 hover:text-orange-500' : 'text-gray-400 hover:text-green-600'}`}
+              >
+                {isFaite ? '↩' : '✓'}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function TodaySeanceRow({ s, cl, onToggle }) {
   const etoiles = s.etoiles || 0
   const isFaite = s.statut === 'faite'
@@ -414,6 +460,17 @@ export default function Dashboard() {
           update('seancesCalendrier', s.id, { statut: newStatut })
         }
 
+        // Group by slot (heureDebut + heureFin)
+        const seenSlots = new Set()
+        const todayGroups = []
+        todaySeances.forEach(item => {
+          const key = `${item.s.heureDebut}|${item.s.heureFin}`
+          if (!seenSlots.has(key)) {
+            seenSlots.add(key)
+            todayGroups.push(todaySeances.filter(x => x.s.heureDebut === item.s.heureDebut && x.s.heureFin === item.s.heureFin))
+          }
+        })
+
         const allDone = todaySeances.length > 0 && todaySeances.every(({ s }) => s.statut === 'faite')
 
         return (
@@ -430,16 +487,18 @@ export default function Dashboard() {
                     Tous vos cours du jour sont terminés ! 🎉
                   </p>
                   <div className="space-y-2">
-                    {todaySeances.map(({ s, cl }) => (
-                      <TodaySeanceRow key={s.id} s={s} cl={cl} onToggle={() => toggleTodayStatut(s)} />
-                    ))}
+                    {todayGroups.map(group => group.length === 1
+                      ? <TodaySeanceRow key={group[0].s.id} s={group[0].s} cl={group[0].cl} onToggle={() => toggleTodayStatut(group[0].s)} />
+                      : <TodayMergedRow key={`m_${group[0].s.heureDebut}`} group={group} onToggle={toggleTodayStatut} onToggleAll={() => group.forEach(({ s }) => { if (s.statut !== 'faite') toggleTodayStatut(s) })} />
+                    )}
                   </div>
                 </>
               ) : (
                 <div className="space-y-2">
-                  {todaySeances.map(({ s, cl }) => (
-                    <TodaySeanceRow key={s.id} s={s} cl={cl} onToggle={() => toggleTodayStatut(s)} />
-                  ))}
+                  {todayGroups.map(group => group.length === 1
+                    ? <TodaySeanceRow key={group[0].s.id} s={group[0].s} cl={group[0].cl} onToggle={() => toggleTodayStatut(group[0].s)} />
+                    : <TodayMergedRow key={`m_${group[0].s.heureDebut}`} group={group} onToggle={toggleTodayStatut} onToggleAll={() => group.forEach(({ s }) => { if (s.statut !== 'faite') toggleTodayStatut(s) })} />
+                  )}
                 </div>
               )}
             </div>
@@ -545,44 +604,95 @@ export default function Dashboard() {
                       <div className="absolute inset-0 bg-orange-50/70 dark:bg-orange-900/20 pointer-events-none z-5" />
                     )}
 
-                    {!isVac && daySeances.map(s => {
-                      const cl = classList.find(c => c.id === s.classeId)
-                      const { top, height } = getEventPos(s.heureDebut, s.heureFin)
-                      const borderColor = TYPE_BORDER_COLORS[s.type] || '#94a3b8'
-                      const bgColor = cl?.couleur ? (cl.couleur + 'bb') : '#e2e8f0'
-                      return (
-                        <div
-                          key={s.id}
-                          onClick={() => navigate(`/classes/${s.classeId}?tab=seances`)}
-                          style={{
-                            position: 'absolute',
-                            top: `${top}px`, height: `${height}px`,
-                            left: '3px', right: '3px',
-                            backgroundColor: bgColor,
-                            borderLeft: `3px solid ${borderColor}`,
-                            borderRadius: '7px',
-                            overflow: 'hidden',
-                            cursor: 'pointer',
-                            zIndex: 10,
-                          }}
-                          className="hover:opacity-75 transition-opacity shadow-sm"
-                        >
-                          <div style={{ padding: '3px 5px', height: '100%', overflow: 'hidden' }}>
-                            <p style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: '#1e293b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {s.titre || cl?.nom || '?'}
-                            </p>
-                            {height > 34 && (
-                              <p style={{ fontSize: 10, color: '#374151', opacity: 0.75, margin: '1px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {[
-                                  cl?.matieres?.find(m => m.id === s.matiereId)?.nom || 'Matière non définie',
-                                  cl?.nom || '?',
-                                ].join(' · ')}
+                    {!isVac && (() => {
+                      // Group séances by slot
+                      const slotsSeen = new Set()
+                      const daySlotGroups = []
+                      daySeances.forEach(s => {
+                        const key = `${s.heureDebut}|${s.heureFin}`
+                        if (!slotsSeen.has(key)) {
+                          slotsSeen.add(key)
+                          daySlotGroups.push(daySeances.filter(x => x.heureDebut === s.heureDebut && x.heureFin === s.heureFin))
+                        }
+                      })
+                      return daySlotGroups.map(group => {
+                        const s0 = group[0]
+                        const { top, height } = getEventPos(s0.heureDebut, s0.heureFin)
+                        if (group.length === 1) {
+                          const s = group[0]
+                          const cl = classList.find(c => c.id === s.classeId)
+                          const borderColor = TYPE_BORDER_COLORS[s.type] || '#94a3b8'
+                          const bgColor = cl?.couleur ? (cl.couleur + 'bb') : '#e2e8f0'
+                          return (
+                            <div
+                              key={s.id}
+                              onClick={() => navigate(`/classes/${s.classeId}?tab=seances`)}
+                              style={{
+                                position: 'absolute',
+                                top: `${top}px`, height: `${height}px`,
+                                left: '3px', right: '3px',
+                                backgroundColor: bgColor,
+                                borderLeft: `3px solid ${borderColor}`,
+                                borderRadius: '7px',
+                                overflow: 'hidden',
+                                cursor: 'pointer',
+                                zIndex: 10,
+                              }}
+                              className="hover:opacity-75 transition-opacity shadow-sm"
+                            >
+                              <div style={{ padding: '3px 5px', height: '100%', overflow: 'hidden' }}>
+                                <p style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: '#1e293b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {s.titre || cl?.nom || '?'}
+                                </p>
+                                {height > 34 && (
+                                  <p style={{ fontSize: 10, color: '#374151', opacity: 0.75, margin: '1px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {[
+                                      cl?.matieres?.find(m => m.id === s.matiereId)?.nom || 'Matière non définie',
+                                      cl?.nom || '?',
+                                    ].join(' · ')}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        }
+                        // Merged slot
+                        const groupCls = group.map(s => classList.find(c => c.id === s.classeId))
+                        const firstCl = groupCls[0]
+                        const label = group.length <= 2
+                          ? groupCls.map(c => c?.nom || '?').join(' / ')
+                          : `${firstCl?.nom || '?'} + ${group.length - 1} autres`
+                        return (
+                          <div
+                            key={`merged_${s0.heureDebut}_${s0.heureFin}`}
+                            onClick={() => navigate('/calendrier')}
+                            style={{
+                              position: 'absolute',
+                              top: `${top}px`, height: `${height}px`,
+                              left: '3px', right: '3px',
+                              backgroundColor: firstCl?.couleur ? (firstCl.couleur + 'bb') : '#e2e8f0',
+                              borderLeft: '3px solid #64748b',
+                              borderRadius: '7px',
+                              overflow: 'hidden',
+                              cursor: 'pointer',
+                              zIndex: 10,
+                            }}
+                            className="hover:opacity-75 transition-opacity shadow-sm"
+                          >
+                            <div style={{ padding: '3px 5px', height: '100%', overflow: 'hidden' }}>
+                              <p style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: '#1e293b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {label}
                               </p>
-                            )}
+                              {height > 28 && (
+                                <p style={{ fontSize: 9, color: '#475569', background: '#e2e8f0', borderRadius: 3, padding: '0 3px', display: 'inline-block', margin: '2px 0 0', fontWeight: 700 }}>
+                                  {group.length} classes
+                                </p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      )
-                    })}
+                        )
+                      })
+                    })()}
                   </div>
                 )
               })}

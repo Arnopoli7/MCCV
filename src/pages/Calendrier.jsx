@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar'
 import { format, parse, startOfWeek, getDay } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -40,6 +41,43 @@ function SeanceEvent({ event, calView }) {
   if (event.isVacances || event.isStage) {
     return <span style={{ fontSize: 11 }}>{event.title}</span>
   }
+
+  if (event.isMerged) {
+    if (calView === Views.MONTH) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', padding: '1px 4px' }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: event.classeCouleur, flexShrink: 0 }} />
+          <span style={{ fontSize: 11, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+            {event.title}
+          </span>
+          <span style={{ fontSize: 9, background: '#e2e8f0', color: '#475569', borderRadius: 4, padding: '0 4px', fontWeight: 700, flexShrink: 0 }}>
+            {event.count}
+          </span>
+        </div>
+      )
+    }
+    return (
+      <div style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <p style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {event.title}
+        </p>
+        <span style={{
+          display: 'inline-block',
+          fontSize: 9,
+          padding: '1px 5px',
+          borderRadius: 4,
+          backgroundColor: '#e2e8f0',
+          color: '#475569',
+          fontWeight: 700,
+          alignSelf: 'flex-start',
+          whiteSpace: 'nowrap',
+        }}>
+          {event.count} classes
+        </span>
+      </div>
+    )
+  }
+
   const tc = TYPE_COLORS[event.type] || { border: '#94a3b8', badge: '#f1f5f9', badgeText: '#64748b' }
 
   if (calView === Views.MONTH) {
@@ -153,6 +191,7 @@ function CalToolbar({ onNavigate, label, view, onView }) {
 }
 
 export default function Calendrier() {
+  const navigate = useNavigate()
   const { classes, seancesCalendrier, rubanPedagogique, vacances, stages, getAnneeActive, update, cleanOrphanCalendarEvents } = useData()
   const toast = useToast()
 
@@ -162,6 +201,7 @@ export default function Calendrier() {
   const [calDate, setCalDate] = useState(new Date())
   const [filterClasseId, setFilterClasseId] = useState('all')
   const [selectedEvent, setSelectedEvent] = useState(null)
+  const [mergedSlotKey, setMergedSlotKey] = useState(null)
 
   const anneeActive = getAnneeActive()
 
@@ -173,7 +213,6 @@ export default function Calendrier() {
   const vacancesList = vacances(anneeId)
   const stagesList = stages(anneeId)
 
-  // Resolve title/type from ruban
   function getSeanceInfo(s) {
     if (s.titre) return { titre: s.titre, type: s.type }
     for (const rb of allRubans) {
@@ -194,31 +233,75 @@ export default function Calendrier() {
     return 'à faire'
   }
 
-  // Build events from seancesCalendrier
   let allSeances = seancesCalendrier(anneeId ? { anneeScolaireId: anneeId } : {})
   if (filterClasseId !== 'all') {
     allSeances = allSeances.filter(s => s.classeId === filterClasseId)
   }
 
-  const seanceEvents = allSeances.map(s => {
-    const info = getSeanceInfo(s)
-    const classe = allClasses.find(c => c.id === s.classeId)
-    const matiereNom = s.matiereId
-      ? (classe?.matieres?.find(m => m.id === s.matiereId)?.nom || 'Non définie')
-      : 'Matière non définie'
-    const start = combineDateAndTime(s.date, s.heureDebut || '08:00')
-    const end = combineDateAndTime(s.date, s.heureFin || '09:00')
+  // Group séances by slot (date + heureDebut + heureFin)
+  const slotMap = {}
+  allSeances.forEach(s => {
+    const key = `${s.date}|${s.heureDebut}|${s.heureFin}`
+    if (!slotMap[key]) slotMap[key] = []
+    slotMap[key].push(s)
+  })
+
+  const seanceEvents = Object.values(slotMap).map(group => {
+    const s0 = group[0]
+    const start = combineDateAndTime(s0.date, s0.heureDebut || '08:00')
+    const end = combineDateAndTime(s0.date, s0.heureFin || '09:00')
+
+    if (group.length === 1) {
+      const s = group[0]
+      const info = getSeanceInfo(s)
+      const classe = allClasses.find(c => c.id === s.classeId)
+      const matiereNom = s.matiereId
+        ? (classe?.matieres?.find(m => m.id === s.matiereId)?.nom || 'Non définie')
+        : 'Matière non définie'
+      return {
+        id: s.id,
+        title: info.titre,
+        start, end,
+        resource: s,
+        type: info.type,
+        classeNom: classe?.nom || '',
+        classeCouleur: classe?.couleur || '#94a3b8',
+        matiereNom,
+        statut: getStatut(s),
+        isVacances: false,
+      }
+    }
+
+    // Merged event: multiple classes at same slot
+    const groupClasses = group.map(s => allClasses.find(c => c.id === s.classeId))
+    const classesNoms = groupClasses.map(c => c?.nom || '?')
+    const infos = group.map(s => getSeanceInfo(s))
+    const uniqueTitres = [...new Set(infos.map(i => i.titre))]
+    const matiereNoms = group.map((s, i) => {
+      const cl = groupClasses[i]
+      return s.matiereId ? (cl?.matieres?.find(m => m.id === s.matiereId)?.nom || null) : null
+    })
+    const uniqueMatieres = [...new Set(matiereNoms.filter(Boolean))]
+
+    let title
+    if (uniqueTitres.length === 1 && uniqueMatieres.length === 1) {
+      title = `${uniqueMatieres[0]} — ${classesNoms.join(' / ')}`
+    } else if (uniqueTitres.length === 1) {
+      title = `${uniqueTitres[0]} — ${classesNoms.join(' / ')}`
+    } else {
+      title = classesNoms.join(' / ')
+    }
+
     return {
-      id: s.id,
-      title: info.titre,
-      start,
-      end,
-      resource: s,
-      type: info.type,
-      classeNom: classe?.nom || '',
-      classeCouleur: classe?.couleur || '#94a3b8',
-      matiereNom,
-      statut: getStatut(s),
+      id: `merged_${s0.date}_${s0.heureDebut}`,
+      title,
+      start, end,
+      isMerged: true,
+      mergedSeances: group,
+      mergedClasses: groupClasses,
+      classesNoms,
+      classeCouleur: groupClasses[0]?.couleur || '#94a3b8',
+      count: group.length,
       isVacances: false,
     }
   })
@@ -269,6 +352,21 @@ export default function Calendrier() {
         }
       }
     }
+    if (event.isMerged) {
+      return {
+        style: {
+          backgroundColor: event.classeCouleur + 'aa',
+          borderLeft: `4px solid ${event.classeCouleur}`,
+          borderTop: 'none',
+          borderRight: 'none',
+          borderBottom: 'none',
+          borderRadius: '10px',
+          color: '#1e293b',
+          fontSize: '0.75rem',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+        }
+      }
+    }
     const tc = TYPE_COLORS[event.type] || { border: '#94a3b8' }
     const bgColor = event.statut === 'en retard' ? '#fee2e2' : (event.classeCouleur + 'cc')
     const textColor = event.statut === 'en retard' ? '#991b1b' : '#1e293b'
@@ -289,6 +387,10 @@ export default function Calendrier() {
 
   function handleSelectEvent(event) {
     if (event.isVacances || event.isStage) return
+    if (event.isMerged) {
+      setMergedSlotKey(event.id)
+      return
+    }
     setSelectedEvent({ seance: event.resource, info: getSeanceInfo(event.resource) })
   }
 
@@ -323,6 +425,19 @@ export default function Calendrier() {
     toast.info('Document supprimé.')
   }
 
+  // Derived merged event — always reads from up-to-date seanceEvents
+  const mergedEvent = mergedSlotKey ? seanceEvents.find(e => e.id === mergedSlotKey) : null
+
+  function markAllDone() {
+    if (!mergedEvent) return
+    mergedEvent.mergedSeances.forEach(s => {
+      if (getStatut(s) !== 'faite') {
+        update('seancesCalendrier', s.id, { statut: 'faite' })
+      }
+    })
+    toast.success('Toutes les séances marquées comme faites ✓')
+  }
+
   const selSeance = selectedEvent?.seance || null
   const selInfo = selectedEvent?.info || null
   const selStatut = selSeance ? getStatut(selSeance) : null
@@ -336,7 +451,6 @@ export default function Calendrier() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-900 dark:text-white">Calendrier global</h1>
 
-        {/* Filter by class */}
         <select
           value={filterClasseId}
           onChange={e => setFilterClasseId(e.target.value)}
@@ -349,7 +463,6 @@ export default function Calendrier() {
         </select>
       </div>
 
-      {/* Legend */}
       {allClasses.length > 0 && filterClasseId === 'all' && (
         <div className="flex flex-wrap gap-3">
           {allClasses.map(c => (
@@ -392,9 +505,110 @@ export default function Calendrier() {
             toolbar: CalToolbar,
           }}
           popup
-          tooltipAccessor={event => event.isVacances ? event.title : `${event.title}${event.matiereNom ? ` — ${event.matiereNom}` : ''}${event.type ? ` — ${event.type}` : ''} (${event.classeNom})`}
+          tooltipAccessor={event => {
+            if (event.isVacances || event.isStage) return event.title
+            if (event.isMerged) return `${event.title} — ${event.count} classes`
+            return `${event.title}${event.matiereNom ? ` — ${event.matiereNom}` : ''}${event.type ? ` — ${event.type}` : ''} (${event.classeNom})`
+          }}
         />
       </div>
+
+      {/* Modal créneau fusionné */}
+      <Modal
+        isOpen={!!mergedSlotKey}
+        onClose={() => setMergedSlotKey(null)}
+        title={mergedEvent ? `${mergedEvent.count} classes — même créneau` : ''}
+        size="lg"
+      >
+        {mergedEvent && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {format(mergedEvent.start, 'EEEE d MMMM yyyy', { locale: fr })} · {mergedEvent.mergedSeances[0]?.heureDebut} – {mergedEvent.mergedSeances[0]?.heureFin}
+            </p>
+
+            <div className="space-y-2">
+              {mergedEvent.mergedSeances.map((s, i) => {
+                const cl = mergedEvent.mergedClasses[i]
+                const info = getSeanceInfo(s)
+                const statut = getStatut(s)
+                const matiereNom = s.matiereId
+                  ? (cl?.matieres?.find(m => m.id === s.matiereId)?.nom || null)
+                  : null
+                return (
+                  <div
+                    key={s.id}
+                    className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
+                      statut === 'faite'
+                        ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
+                        : statut === 'en retard'
+                        ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800'
+                        : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'
+                    }`}
+                  >
+                    {cl && (
+                      <div className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: cl.couleur }} />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {cl && (
+                          <span className="text-xs font-bold shrink-0" style={{ color: cl.couleur }}>{cl.nom}</span>
+                        )}
+                        <span className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{info.titre}</span>
+                        {matiereNom && (
+                          <span className="text-xs text-gray-400 truncate">{matiereNom}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                          statut === 'faite' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                          : statut === 'en retard' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                        }`}>
+                          {statut === 'faite' ? '✓ Faite' : statut === 'en retard' ? 'En retard' : 'À faire'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          const newStatut = statut === 'faite' ? 'à faire' : 'faite'
+                          update('seancesCalendrier', s.id, { statut: newStatut })
+                          toast.success(newStatut === 'faite' ? 'Séance marquée faite ✓' : 'Séance remise à faire.')
+                        }}
+                        className={`p-1.5 rounded-lg text-xs font-medium transition-colors ${
+                          statut === 'faite'
+                            ? 'bg-gray-100 dark:bg-gray-700 text-gray-500 hover:bg-orange-100 hover:text-orange-600'
+                            : 'bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 hover:bg-green-200'
+                        }`}
+                        title={statut === 'faite' ? 'Remettre à faire' : 'Marquer faite'}
+                      >
+                        {statut === 'faite' ? <Clock size={14} /> : <CheckCircle size={14} />}
+                      </button>
+                      {cl && (
+                        <button
+                          onClick={() => { setMergedSlotKey(null); navigate(`/classes/${cl.id}?tab=seances`) }}
+                          className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 hover:bg-blue-100 font-medium"
+                        >
+                          Fiche →
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {mergedEvent.mergedSeances.some(s => getStatut(s) !== 'faite') && (
+              <button
+                onClick={markAllDone}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 text-white font-medium text-sm transition-colors"
+              >
+                <CheckCircle size={16} /> Tout marquer comme fait
+              </button>
+            )}
+          </div>
+        )}
+      </Modal>
 
       {/* Modal détail séance */}
       <Modal
